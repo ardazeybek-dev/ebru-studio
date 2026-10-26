@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ebru Studio</title>
+<meta name="description" content="Drop paint on water, pull it with a stylus or comb and make your own Turkish marbling (ebru). Runs in the browser, exports PNG.">
+<meta name="theme-color" content="#141218">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --chrome: rgba(20,18,24,.74);
+  --chrome-line: rgba(255,244,224,.12);
+  --ink: #f4ecdd;
+  --muted: rgba(244,236,221,.62);
+  --accent: #f0b730;
+  --radius: 18px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#141218;color:var(--ink);overflow:hidden;
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+canvas#c{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+.grain{position:fixed;inset:0;pointer-events:none;mix-blend-mode:multiply;opacity:.55}
+.vignette{position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(40,25,10,.22) 100%)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+header{position:fixed;top:max(12px,env(safe-area-inset-top));left:16px;right:16px;display:flex;
+  align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
+.brand{pointer-events:auto;background:var(--chrome);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--chrome-line);border-radius:var(--radius);padding:10px 16px 11px;line-height:1.05}
+.brand h1{font-family:Fraunces,Georgia,serif;font-weight:500;font-size:26px;letter-spacing:.01em}
+.brand h1 i{font-weight:400;color:var(--accent)}
+.brand p{font-size:11.5px;color:var(--muted);margin-top:4px;letter-spacing:.02em}
+.actions{pointer-events:auto;display:flex;gap:6px;background:var(--chrome);backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);border:1px solid var(--chrome-line);border-radius:var(--radius);padding:6px}
+.actions button{display:flex;align-items:center;gap:7px;height:40px;padding:0 13px;border-radius:12px;font-size:13.5px;font-weight:500;transition:background .15s}
+.actions button:hover{background:rgba(255,244,224,.09)}
+.actions button.primary{background:var(--accent);color:#1c1406}
+.actions button.primary:hover{background:#ffc94d}
+.actions svg{width:18px;height:18px;flex:none}
+
+.dock{position:fixed;left:50%;transform:translateX(-50%);bottom:max(14px,env(safe-area-inset-bottom));
+  width:min(760px,calc(100vw - 32px));background:var(--chrome);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid var(--chrome-line);border-radius:22px;padding:8px;display:flex;flex-direction:column;gap:8px}
+.tools{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.tools button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 2px 7px;border-radius:14px;
+  font-size:12px;font-weight:500;color:var(--muted);transition:background .15s,color .15s}
+.tools button svg{width:24px;height:24px}
+.tools button:hover{color:var(--ink);background:rgba(255,244,224,.06)}
+.tools button[aria-pressed=true]{background:rgba(255,244,224,.13);color:var(--ink)}
+.tools button[aria-pressed=true] svg{color:var(--accent)}
+.row{display:flex;align-items:center;gap:14px;padding:2px 8px 4px}
+.swatches{display:flex;gap:7px;flex-wrap:wrap}
+.swatches button{width:28px;height:28px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);transition:transform .15s}
+.swatches button:hover{transform:scale(1.1)}
+.swatches button[aria-pressed=true]{box-shadow:0 0 0 2px #141218,0 0 0 4px var(--ink);transform:scale(1.05)}
+.size{display:flex;align-items:center;gap:10px;margin-left:auto;font-size:12px;color:var(--muted);min-width:170px}
+.size input{flex:1;accent-color:var(--accent);min-width:90px}
+.size .dot{width:22px;height:22px;display:grid;place-items:center}
+.size .dot span{display:block;border-radius:50%;background:var(--ink)}
+
+.hint{position:fixed;left:50%;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 136px);transform:translateX(-50%);padding:12px 18px;border-radius:999px;
+  background:rgba(20,18,24,.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-size:14px;
+  pointer-events:none;transition:opacity .6s;white-space:nowrap;border:1px solid var(--chrome-line)}
+.hint.gone{opacity:0}
+.toast{position:fixed;left:50%;top:84px;transform:translateX(-50%);background:var(--accent);color:#1c1406;font-weight:600;
+  font-size:13px;padding:8px 14px;border-radius:999px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.on{opacity:1}
+
+@media (max-width:640px){
+  .brand{padding:8px 12px 9px}
+  .brand h1{font-size:21px}
+  .brand p{display:none}
+  .actions{gap:2px;padding:4px}
+  .actions button{padding:0 10px;height:38px}
+  .actions .lbl{display:none}
+  .row{flex-wrap:wrap;gap:10px;padding:2px 4px 4px}
+  .swatches{gap:6px;width:100%;justify-content:space-between}
+  .swatches button{width:26px;height:26px}
+  .size{margin-left:0;width:100%}
+  .tools button{font-size:11px}
+  .hint{bottom:calc(max(14px,env(safe-area-inset-bottom)) + 178px);font-size:13px;white-space:normal;width:max-content;max-width:calc(100vw - 48px);text-align:center;border-radius:16px}
+}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Marbling tray. Tap to drop paint, drag to pull it."></canvas>
+<div class="grain" id="grain"></div>
+<div class="vignette"></div>
+
+<header>
+  <div class="brand">
+    <h1>Ebru <i>Studio</i></h1>
+    <p>the Turkish art of marbling on water</p>
+  </div>
+  <div class="actions">
+    <button id="bUndo" title="Undo (Z)" aria-label="Undo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span class="lbl">Undo</span></button>
+    <button id="bClear" title="Clear the tray (C)" aria-label="Clear">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg><span class="lbl">Clear</span></button>
+    <button id="bAuto" title="Make a classic pattern (R)" aria-label="Make a pattern">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span class="lbl">Pattern</span></button>
+    <button id="bSave" class="primary" title="Download PNG (S)" aria-label="Download PNG">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg><span class="lbl">PNG</span></button>
+  </div>
+</header>
+
+<div class="hint" id="hint">Tap to drop paint · hold to let it spread · drag with Comb or Stylus</div>
+<div class="toast" id="toast"></div>
+
+<nav class="dock" aria-label="Tools">
+  <div class="tools" id="tools">
+    <button data-tool="drop" aria-pressed="true" title="Damla — drop paint (1)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3s6 6.6 6 11a6 6 0 0 1-12 0c0-4.4 6-11 6-11z"/></svg>Drop</button>
+    <button data-tool="sprinkle" aria-pressed="false" title="Serpme — sprinkle drops (2)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="7" cy="8" r="2.3"/><circle cx="15.5" cy="6" r="1.6"/><circle cx="12" cy="13" r="2.8"/><circle cx="18" cy="15" r="2"/><circle cx="6.5" cy="17.5" r="1.7"/></svg>Sprinkle</button>
+    <button data-tool="needle" aria-pressed="false" title="Biz — pull paint with a stylus (3)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M19 4 6.5 16.5"/><path d="M6.5 16.5 4 20l3.5-2.5"/><path d="M4 9c3-3 6 2 9-1"/></svg>Stylus</button>
+    <button data-tool="comb" aria-pressed="false" title="Tarak — comb the paint (4)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18"/><path d="M5 6v12M9 6v12M13 6v12M17 6v12M21 6v12"/></svg>Comb</button>
+    <button data-tool="swirl" aria-pressed="false" title="Girdap — hold to swirl (5)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 12a1.5 1.5 0 1 1 1.5-1.5c0 2.5-3.5 3.5-5 1.5-2-2.5 0-7 4-6.5 4.5.5 6 6 3 9-3.5 3.5-10 2-11-3"/></svg>Swirl</button>
+  </div>
+  <div class="row">
+    <div class="swatches" id="swatches" aria-label="Paint colours"></div>
+    <label class="size">Size
+      <input id="size" type="range" min="12" max="90" value="38" aria-label="Brush size">
+      <span class="dot"><span id="sizeDot"></span></span>
+    </label>
+  </div>
+</nav>
+
+<script>
+(() => {
+'use strict';
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = 0, H = 0, DPR = 1;
+
+const PALETTE = [
+  ['Lapis', '#1f4597'], ['Indigo', '#1a2350'], ['Carmine', '#b3243b'], ['Rose', '#e3849a'],
+  ['Saffron', '#f2b733'], ['Ochre', '#c8762a'], ['Turquoise', '#1d9c98'], ['Olive', '#617f37'],
+  ['Ivory', '#f7f0e0'], ['Ink', '#17151a']
+];
+const C = Object.fromEntries(PALETTE.map(([n, h]) => [n, h]));
+const THEMES = [
+  { base: '#efe3c8', cols: ['Lapis', 'Carmine', 'Saffron', 'Ivory', 'Indigo'] },
+  { base: '#e6eee8', cols: ['Turquoise', 'Lapis', 'Ivory', 'Indigo', 'Ochre'] },
+  { base: '#f3e6d3', cols: ['Carmine', 'Rose', 'Olive', 'Saffron', 'Ivory'] },
+  { base: '#1a1b2e', cols: ['Saffron', 'Ivory', 'Turquoise', 'Rose', 'Lapis'] },
+  { base: '#ecdcbb', cols: ['Ochre', 'Olive', 'Carmine', 'Ink', 'Ivory'] },
+  { base: '#f2ead8', cols: ['Indigo', 'Lapis', 'Turquoise', 'Ivory', 'Saffron'] }
+];
+const BASE = '#efe3c8';
+let base = BASE;
+let colorIdx = 0, tool = 'drop', size = 38;
+
+/* ---------- geometry: each paint drop is a closed polygon ---------- */
+let drops = [];            // { p: Float64Array [x,y,...], n, c }
+let geomDirty = true, dirty = true;
+const MARGIN = 280;        // paint kept this far outside the view
+
+function shade(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  const k = 1 + (Math.random() - 0.5) * 0.14;
+  const f = x => Math.max(0, Math.min(255, Math.round(x * k)));
+  return `rgb(${f(v >> 16)},${f((v >> 8) & 255)},${f(v & 255)})`;
+}
+function circle(cx, cy, r) {
+  const n = Math.max(28, Math.ceil(2 * Math.PI * r / 2.2));
+  const p = new Float64Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    p[2 * i] = cx + r * Math.cos(a); p[2 * i + 1] = cy + r * Math.sin(a);
+  }
+  return { p, n };
+}
+
+/* Drop: every point is pushed out radially so the area of the new drop fits in.
+   P' = C + (P-C) * sqrt(1 + r^2 / |P-C|^2)   (area-preserving, like real paint on size) */
+function opDrop(cx, cy, r2) {
+  for (const d of bodies()) {
+    const p = d.p, m = d.n * 2;
+    for (let i = 0; i < m; i += 2) {
+      const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
+      if (q < 1e-12 || r2 < q * 1e-8) continue;
+      const s = Math.sqrt(1 + r2 / q);
+      p[i] = cx + dx * s; p[i + 1] = cy + dy * s;
+    }
+  }
+  geomDirty = true;
+}
+/* Stroke: a stylus (spacing 0) or a comb of parallel tines moving from A to B.
+   Paint near the tines is dragged along, with exponential fall-off. */
+function opStroke(ax, ay, bx, by, spacing, lam) {
+  const mx = bx - ax, my = by - ay, z = Math.hypot(mx, my);
+  if (z < 1e-3) return;
+  const ux = mx / z, uy = my / z, nx = -uy, ny = ux, cut = lam * 9;
+  for (const d of bodies()) {
+    const p = d.p, m = d.n * 2;
+    for (let i = 0; i < m; i += 2) {
+      const rx = p[i] - ax, ry = p[i + 1] - ay;
+      const al = rx * ux + ry * uy;
+      const da = al > z ? al - z : (al < 0 ? -al : 0);
+      if (da > cut) continue;
+      let pe = rx * nx + ry * ny;
+      if (spacing > 0) pe -= spacing * Math.round(pe / spacing);
+      else if (pe > cut || pe < -cut) continue;
+      const dd = Math.sqrt(da * da + pe * pe);
+      if (dd > cut) continue;
+      const w = z * Math.exp(-dd / lam);
+      p[i] += ux * w; p[i + 1] += uy * w;
+    }
+  }
+  geomDirty = true;
+}
+/* Swirl: each ring around the centre turns rigidly, inner rings faster. */
+function opSwirl(cx, cy, ang, R) {
+  const R2 = R * R, cut = 9 * R2;
+  for (const d of bodies()) {
+    const p = d.p, m = d.n * 2;
+    for (let i = 0; i < m; i += 2) {
+      const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
+      if (q > cut) continue;
+      const a = ang * Math.exp(-q / R2), c = Math.cos(a), s = Math.sin(a);
+      p[i] = cx + dx * c - dy * s; p[i + 1] = cy + dx * s + dy * c;
+    }
+  }
+  geomDirty = true;
+}
+/* Shears used by the classic patterns: x += z*f(y)  or  y += z*f(x) */
+function opShear(z, f, vertical) {
+  const a = vertical ? 0 : 1, b = vertical ? 1 : 0;
+  for (const d of bodies()) {
+    const p = d.p, m = d.n * 2;
+    for (let i = 0; i < m; i += 2) p[i + b] += z * f(p[i + a]);
+  }
+  geomDirty = true;
+}
+
+/* Keep curves smooth: split long edges, merge tiny ones, thin out paint far off-screen. */
+let buf = new Float64Array(1 << 16);
+function ensure(k) {
+  if (buf.length >= k) return;
+  let L = buf.length; while (L < k) L *= 2;
+  const nb = new Float64Array(L); nb.set(buf); buf = nb;
+}
+function oc(x, y) {
+  return (x < -MARGIN ? 1 : 0) | (x > W + MARGIN ? 2 : 0) | (y < -MARGIN ? 4 : 0) | (y > H + MARGIN ? 8 : 0);
+}
+function refine(d, maxL) {
+  const p = d.p, n = d.n, maxL2 = maxL * maxL, minL = Math.max(0.65, maxL * 0.36), minL2 = minL * minL, canDrop = n > 14;
+  let m = 0; ensure(n * 2 + 64);
+  let lx = p[0], ly = p[1], lo = oc(lx, ly);
+  buf[m++] = lx; buf[m++] = ly;
+  let x0 = lx, x1 = lx, y0 = ly, y1 = ly;
+  for (let i = 1; i <= n; i++) {
+    const j = i === n ? 0 : i, x = p[2 * j], y = p[2 * j + 1], o = oc(x, y);
+    const dx = x - lx, dy = y - ly, L2 = dx * dx + dy * dy;
+    if (i < n && canDrop) {
+      if (L2 < minL2) continue;
+      if (lo & o) {
+        const k = (i + 1) % n;
+        if (lo & o & oc(p[2 * k], p[2 * k + 1])) continue;
+      }
+    }
+    if (L2 > maxL2 && !(lo & o)) {
+      const k = Math.ceil(Math.sqrt(L2) / maxL);
+      ensure(m + 2 * k + 4);
+      for (let t = 1; t < k; t++) { buf[m++] = lx + dx * t / k; buf[m++] = ly + dy * t / k; }
+    }
+    if (i < n) {
+      ensure(m + 4);
+      buf[m++] = x; buf[m++] = y; lx = x; ly = y; lo = o;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  d.p = buf.slice(0, m); d.n = m >> 1;
+  d.out = x1 < -MARGIN || x0 > W + MARGIN || y1 < -MARGIN || y0 > H + MARGIN;
+}
+/* Vertex budget: when the curves get very long, sample them a little coarser so it stays smooth to use. */
+let totalVerts = 0, maxL = 2.2;
+function budget() { return 90000 + 70000 * Math.min(1.4, (W * H) / 1296000); }
+function refineAll() {
+  const B = budget();
+  if (totalVerts > B) maxL = Math.min(8, maxL * Math.min(1.25, Math.sqrt(totalVerts / B)));
+  else if (totalVerts < B * 0.7) maxL = Math.max(2.2, maxL * 0.97);
+  let t = 0;
+  for (const d of drops) { refine(d, maxL); t += d.n; }
+  if (drops.some(d => d.out)) drops = drops.filter(d => !d.out);
+  totalVerts = t;
+}
+
+/* ---------- rendering ---------- */
+function render(fine) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = base; ctx.fillRect(0, 0, W, H);
+  ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(255,248,232,.28)'; ctx.lineWidth = 0.9;
+  for (const d of drops) {
+    const p = d.p, m = d.n * 2;
+    ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+    for (let i = 2; i < m; i += 2) ctx.lineTo(p[i], p[i + 1]);
+    ctx.closePath();
+    ctx.fillStyle = d.c; ctx.fill();
+    if (fine) ctx.stroke();
+  }
+}
+
+/* paper grain overlay (also baked into the PNG) */
+const grain = document.createElement('canvas');
+(function makeGrain() {
+  const S = 220; grain.width = grain.height = S;
+  const g = grain.getContext('2d'), img = g.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = 236 + Math.random() * 19;
+    img.data[4 * i] = v; img.data[4 * i + 1] = v - 2; img.data[4 * i + 2] = v - 6; img.data[4 * i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  g.strokeStyle = 'rgba(150,120,80,.10)'; g.lineWidth = 0.6;
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * S, y = Math.random() * S, a = Math.random() * 6.28, l = 4 + Math.random() * 12;
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + l * .5 * Math.cos(a + .5), y + l * .5 * Math.sin(a + .5), x + l * Math.cos(a), y + l * Math.sin(a)); g.stroke();
+  }
+  document.getElementById('grain').style.background = `url(${grain.toDataURL()})`;
+})();
+
+/* ---------- live drops that bloom open ---------- */
+/* A growing drop's centre is itself carried by the flow, so it is tracked as a point (trace). */
+let grows = [];
+let trace = { p: new Float64Array(0), n: 0 };
+function bodies() { return trace.n ? drops.concat(trace) : drops; }
+function readBack() { for (let i = 0; i < grows.length; i++) { grows[i].x = trace.p[2 * i]; grows[i].y = trace.p[2 * i + 1]; } }
+function rebuild() {
+  const p = new Float64Array(grows.length * 2);
+  grows.forEach((g, i) => { p[2 * i] = g.x; p[2 * i + 1] = g.y; });
+  trace = { p, n: grows.length };
+}
+function spawnDrop(x, y, r, hex, hold) {
+  const r0 = 0.9;
+  opDrop(x, y, r0 * r0);
+  readBack();
+  const d = Object.assign(circle(x, y, r0), { c: shade(hex) });
+  drops.push(d);
+  const g = { d, x, y, r2: r0 * r0, t2: r * r, hold: !!hold };
+  grows.push(g);
+  rebuild();
+  return g;
+}
+function stepGrows() {
+  if (!grows.length) return;
+  const keep = [];
+  for (let i = 0; i < grows.length; i++) {
+    const g = grows[i];
+    if (g.hold) g.t2 += 26 + g.t2 * 0.012;
+    const left = g.t2 - g.r2;
+    const done = !g.hold && left < Math.max(2, g.t2 * 0.03);
+    const dl = done ? left : left * 0.24;
+    if (dl > 0) opDrop(trace.p[2 * i], trace.p[2 * i + 1], dl);
+    g.r2 += dl;
+    if (!done) keep.push(g);
+  }
+  readBack();
+  grows = keep;
+  rebuild();
+}
+
+/* ---------- timeline for scripted patterns ---------- */
+let tasks = [];
+function* wait(n) { for (let i = 0; i < n; i++) yield; }
+function* settle() { while (grows.length) yield; }
+const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+function* shearAnim(total, steps, f, vertical) {
+  for (let t = 0; t < steps; t++) { opShear(total * (ease((t + 1) / steps) - ease(t / steps)), f, vertical); yield; }
+}
+/* battal: scatter drops until the tray (plus a margin) is covered about `cover` times */
+function* battal(cols, cover, rmin, rmax, perFrame) {
+  const m = 170;
+  const avgArea = Math.PI * (rmin * rmin + rmin * rmax + rmax * rmax) / 3;
+  const count = Math.min(220, Math.ceil(cover * (W + 2 * m) * (H + 2 * m) / avgArea));
+  for (let i = 0; i < count; i++) {
+    while (grows.length > 14) yield;
+    spawnDrop(-m + Math.random() * (W + 2 * m), -m + Math.random() * (H + 2 * m),
+      rmin + Math.random() * (rmax - rmin), C[cols[i % cols.length]]);
+    if (i % perFrame === perFrame - 1) yield;
+  }
+  yield* settle();
+}
+function gelgitF(s) {
+  const lam = s * 0.2;
+  return y => {
+    const i = Math.round(y / s); let v = 0;
+    for (let k = i - 1; k <= i + 1; k++) v += ((k & 1) ? -1 : 1) * Math.exp(-Math.abs(y - k * s) / lam);
+    return v;
+  };
+}
+function combF(s, lam) { return x => Math.exp(-Math.abs(x - s * Math.round(x / s)) / lam); }
+function* gelgit(s, amp, vertical) { yield* shearAnim(amp, 70, gelgitF(s), vertical); }
+function* comb(s, amp, vertical) { yield* shearAnim(amp, 64, combF(s, s * 0.17), vertical); }
+function* wave(len, amp, vertical) { yield* shearAnim(amp, 50, v => Math.sin(v * Math.PI * 2 / len), vertical); }
+function* nests(spacing, turns) {
+  const pts = [];
+  for (let y = spacing * .5; y < H + spacing; y += spacing)
+    for (let x = spacing * .5 + ((y / spacing | 0) % 2) * spacing * .5; x < W + spacing; x += spacing) pts.push([x, y]);
+  const steps = 64, R = spacing * 0.34, R2 = R * R, cut = 6 * R2, e6 = Math.exp(-6), cell = spacing;
+  // centres bucketed in a dense grid so each point only checks its neighbours
+  const gx0 = -cell, gy0 = -cell, GC = Math.ceil((W + 3 * cell) / cell), GR = Math.ceil((H + 3 * cell) / cell);
+  const grid = Array.from({ length: GC * GR }, () => []);
+  for (const c of pts) {
+    const i = Math.floor((c[0] - gx0) / cell), j = Math.floor((c[1] - gy0) / cell);
+    if (i >= 0 && i < GC && j >= 0 && j < GR) grid[i * GR + j].push(c);
+  }
+  for (let t = 0; t < steps; t++) {
+    const a = turns * Math.PI * 2 * (ease((t + 1) / steps) - ease(t / steps));
+    for (const d of bodies()) {
+      const p = d.p, m = d.n * 2;
+      for (let i = 0; i < m; i += 2) {
+        const ci = Math.floor((p[i] - gx0) / cell), cj = Math.floor((p[i + 1] - gy0) / cell);
+        if (ci < 0 || cj < 0 || ci >= GC || cj >= GR) continue;
+        for (let u = Math.max(0, ci - 1); u <= Math.min(GC - 1, ci + 1); u++)
+          for (let v = Math.max(0, cj - 1); v <= Math.min(GR - 1, cj + 1); v++) {
+            const list = grid[u * GR + v];
+            for (let k = 0; k < list.length; k++) {
+              const c = list[k], dx = p[i] - c[0], dy = p[i + 1] - c[1], q = dx * dx + dy * dy;
+              if (q > cut) continue;
+              // tapered to exactly zero at the cut-off so neighbouring nests never tear
+              const an = a * (Math.exp(-q / R2) - e6) / (1 - e6), co = Math.cos(an), si = Math.sin(an);
+              p[i] = c[0] + dx * co - dy * si; p[i + 1] = c[1] + dx * si + dy * co;
+            }
+          }
+      }
+    }
+    geomDirty = true;
+    yield;
+  }
+}
+function* hatip(cols, spacing) {
+  const pts = [];
+  for (let y = spacing * .6; y < H; y += spacing)
+    for (let x = spacing * .6 + ((y / spacing | 0) % 2) * spacing * .5; x < W; x += spacing) pts.push([x, y]);
+  const r = spacing * 0.15;
+  for (let ring = 0; ring < 5; ring++) {
+    for (const [x, y] of pts) spawnDrop(x, y, r, C[cols[ring % cols.length]]);
+    yield* wait(7);
+  }
+  yield* settle();
+  // a stylus runs down through every column: each ring becomes a heart-like "hatip"
+  const xs = [...new Set(pts.map(p => p[0]))];
+  const lam = spacing * 0.07, step = lam * 0.45;
+  for (let y = -40; y < H + 40; y += step * 6) {
+    for (let k = 0; k < 6; k++) for (const x of xs) opStroke(x, y + k * step, x, y + (k + 1) * step, 0, lam);
+    yield;
+  }
+}
+function pick(a) { return a[Math.random() * a.length | 0]; }
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+const RECIPES = {
+  tarakli(th) {      // combed: battal + gel-git + comb
+    const s = Math.max(30, Math.min(W, H) / 16);
+    return [battal(th.cols, 1.25, s * .9, s * 2.2, 4), gelgit(s * 1.4, s * 4.6, true), comb(s * 0.8, s * 2.4, false)];
+  },
+  sal(th) {          // shawl: combed, then waved
+    const s = Math.max(28, Math.min(W, H) / 18);
+    return [battal(th.cols, 1.25, s * .8, s * 2, 4), gelgit(s * 2, s * 2.4, true), comb(s, s * 3, false), wave(s * 7, s * 1.6, false)];
+  },
+  bulbul(th) {       // nightingale's nest: combed, then swirled
+    const s = Math.max(28, Math.min(W, H) / 18);
+    return [battal(th.cols, 1.25, s * .9, s * 2.1, 3), gelgit(s * 2, s * 2.3, false), comb(s * 1.2, s * 2.6, true), nests(Math.max(110, Math.min(W, H) / 4.2), 1.6)];
+  },
+  hatip(th) {
+    const sp = Math.max(96, Math.min(W, H) / 4);
+    const cols = shuffle(th.cols);
+    return [battal([cols[4], cols[3]], 0.9, sp * .25, sp * .5, 4), hatip(cols, sp)];
+  },
+  gelgit(th) {
+    const s = Math.max(26, Math.min(W, H) / 20);
+    return [battal(th.cols, 1.25, s * .7, s * 1.9, 4), gelgit(s * 1.7, s * 3.2, true), gelgit(s * 3, s * 1.6, false)];
+  }
+};
+let lastRecipe = '';
+function playRecipe(name, th) {
+  snapshot();
+  cancelAll();
+  drops = []; base = th.base; totalVerts = 0; maxL = 2.2; geomDirty = dirty = true;
+  tasks = RECIPES[name](th);
+  lastRecipe = name;
+  toast({ tarakli: 'Taraklı ebru — combed', sal: 'Şal ebru — shawl', bulbul: 'Bülbül yuvası — nightingale’s nest', hatip: 'Hatip ebru', gelgit: 'Gel-git ebru — back and forth' }[name]);
+}
+function randomPattern() {
+  const names = Object.keys(RECIPES).filter(n => n !== lastRecipe);
+  playRecipe(pick(names), { base: pick(THEMES).base, cols: pick(THEMES).cols });
+}
+function cancelAll() { tasks = []; grows = []; later.length = 0; rebuild(); if (ptr) ptr.g = null; }
+
+/* ---------- undo ---------- */
+const history = [];
+function snapshot() {
+  history.push({ base, drops: drops.map(d => ({ p: d.p.slice(0, d.n * 2), n: d.n, c: d.c })) });
+  if (history.length > 14) history.shift();
+}
+function undo() {
+  const s = history.pop(); if (!s) return;
+  cancelAll(); base = s.base; drops = s.drops; geomDirty = dirty = true;
+}
+
+/* ---------- pointer ---------- */
+let ptr = null;
+function pos(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+const hintEl = document.getElementById('hint');
+let hinted = true;
+function hideHint() { if (hinted) { hinted = false; hintEl.classList.add('gone'); } }
+
+cv.addEventListener('pointerdown', e => {
+  if (ptr) return;
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  hideHint(); snapshot();
+  const [x, y] = pos(e);
+  ptr = { id: e.pointerId, x, y, sx: x, sy: y, lx: x, ly: y, path: [], g: null };
+  const hex = PALETTE[colorIdx][1];
+  if (tool === 'drop') ptr.g = spawnDrop(x, y, size, hex, true);
+  else if (tool === 'sprinkle') sprinkle(x, y, hex);
+});
+cv.addEventListener('pointermove', e => {
+  if (!ptr || e.pointerId !== ptr.id) return;
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of (evs.length ? evs : [e])) { const [x, y] = pos(ev); ptr.path.push(x, y); ptr.x = x; ptr.y = y; }
+  if (ptr.g && Math.hypot(ptr.x - ptr.sx, ptr.y - ptr.sy) > 10) ptr.g.hold = false;
+});
+function endPtr(e) {
+  if (!ptr || e.pointerId !== ptr.id) return;
+  if (tool !== 'swirl') stepPointer();   // apply a quick flick that ended before the next frame
+  if (ptr.g) ptr.g.hold = false;
+  ptr = null;
+}
+cv.addEventListener('pointerup', endPtr);
+cv.addEventListener('pointercancel', endPtr);
+
+const later = [];
+function sprinkle(x, y, hex) {
+  const n = 9 + (Math.random() * 6 | 0), R = size * 2.3;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * R;
+    later.push({ t: i * 2, fn: () => spawnDrop(x + Math.cos(a) * rr, y + Math.sin(a) * rr, size * (0.18 + Math.random() * 0.3), hex) });
+  }
+}
+function stepPointer() {
+  if (!ptr) return;
+  if (tool === 'swirl') { opSwirl(ptr.x, ptr.y, 0.085, size * 1.5); return; }
+  if (tool !== 'needle' && tool !== 'comb') { ptr.path.length = 0; return; }
+  const spacing = tool === 'comb' ? size * 0.85 + 10 : 0;
+  const lam = tool === 'comb' ? spacing * 0.16 : 5 + size * 0.14;
+  const maxStep = lam * 0.45;
+  const P = ptr.path;
+  for (let i = 0; i < P.length; i += 2) {
+    const tx = P[i], ty = P[i + 1], dx = tx - ptr.lx, dy = ty - ptr.ly, L = Math.hypot(dx, dy);
+    if (L < 0.5) continue;
+    const k = Math.min(40, Math.ceil(L / maxStep));
+    for (let s = 0; s < k; s++)
+      opStroke(ptr.lx + dx * s / k, ptr.ly + dy * s / k, ptr.lx + dx * (s + 1) / k, ptr.ly + dy * (s + 1) / k, spacing, lam);
+    ptr.lx = tx; ptr.ly = ty;
+  }
+  P.length = 0;
+}
+
+/* ---------- main loop ---------- */
+let frameNo = 0;
+const perf = []; let still = false;
+function frame() {
+  requestAnimationFrame(frame);
+  const t0 = performance.now();
+  frameNo++;
+  for (let i = later.length - 1; i >= 0; i--) if (--later[i].t <= 0) { later[i].fn(); later.splice(i, 1); }
+  if (tasks.length) { const r = tasks[0].next(); if (r.done) tasks.shift(); }
+  stepPointer();
+  stepGrows();
+  // moving frames draw fills only; the first still frame adds the thin light rims between colours
+  if (geomDirty) { refineAll(); geomDirty = false; render(false); still = false; }
+  else if (!still || dirty) { render(true); still = true; dirty = false; }
+  perf.push(performance.now() - t0); if (perf.length > 120) perf.shift();
+}
+
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  dirty = true;
+}
+window.addEventListener('resize', resize);
+
+/* ---------- UI ---------- */
+const sw = document.getElementById('swatches');
+PALETTE.forEach(([name, hex], i) => {
+  const b = document.createElement('button');
+  b.style.background = hex; b.title = name; b.setAttribute('aria-label', name);
+  b.setAttribute('aria-pressed', i === colorIdx);
+  b.onclick = () => { colorIdx = i; [...sw.children].forEach((c, j) => c.setAttribute('aria-pressed', j === i)); };
+  sw.appendChild(b);
+});
+const toolsEl = document.getElementById('tools');
+function setTool(t) {
+  tool = t;
+  [...toolsEl.children].forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t));
+}
+toolsEl.addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTool(b.dataset.tool); });
+const sizeEl = document.getElementById('size'), dot = document.getElementById('sizeDot');
+function setSize(v) { size = +v; const px = 5 + (size - 12) / 78 * 17; dot.style.width = dot.style.height = px + 'px'; }
+sizeEl.addEventListener('input', () => setSize(sizeEl.value)); setSize(sizeEl.value);
+
+const toastEl = document.getElementById('toast'); let toastT;
+function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('on'), 2200); }
+
+function save() {
+  render(true);
+  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+  const o = out.getContext('2d');
+  o.drawImage(cv, 0, 0);
+  o.globalCompositeOperation = 'multiply'; o.globalAlpha = 0.55;
+  o.fillStyle = o.createPattern(grain, 'repeat'); o.fillRect(0, 0, out.width, out.height);
+  out.toBlob(b => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b); a.download = 'ebru-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Saved as PNG');
+  }, 'image/png');
+}
+document.getElementById('bUndo').onclick = undo;
+document.getElementById('bClear').onclick = () => { snapshot(); cancelAll(); drops = []; base = BASE; totalVerts = 0; maxL = 2.2; dirty = true; };
+document.getElementById('bAuto').onclick = () => { hideHint(); randomPattern(); };
+document.getElementById('bSave').onclick = save;
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.key !== 'z') return;
+  const k = e.key.toLowerCase();
+  if (k >= '1' && k <= '5') setTool(['drop', 'sprinkle', 'needle', 'comb', 'swirl'][+k - 1]);
+  else if (k === 'z') undo();
+  else if (k === 's' && !e.ctrlKey && !e.metaKey) save();
+  else if (k === 'r') { hideHint(); randomPattern(); }
+  else if (k === 'c') document.getElementById('bClear').click();
+});
+
+// small hook for automated checks
+window.__ebru = {
+  play: name => playRecipe(name, THEMES[0]),
+  work: () => { const a = perf.slice().sort((x, y) => x - y); return { avg: +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(2), p95: +a[Math.floor(a.length * .95)].toFixed(2) }; },
+  stats: () => ({ drops: drops.length, verts: totalVerts, busy: tasks.length + grows.length + later.length }),
+};
+
+resize();
+// open on a freshly made classic pattern
+tasks = RECIPES.tarakli(THEMES[0]);
+lastRecipe = 'tarakli';
+setTimeout(hideHint, 9000);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
