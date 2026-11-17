@@ -11,7 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
-  --chrome: rgba(20,18,24,.74);
+  --chrome: rgba(24,21,28,.93);
   --chrome-line: rgba(255,244,224,.12);
   --ink: #f4ecdd;
   --muted: rgba(244,236,221,.62);
@@ -30,13 +30,13 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 
 header{position:fixed;top:max(12px,env(safe-area-inset-top));left:16px;right:16px;display:flex;
   align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
-.brand{pointer-events:auto;background:var(--chrome);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+.brand{pointer-events:auto;background:var(--chrome);
   border:1px solid var(--chrome-line);border-radius:var(--radius);padding:10px 16px 11px;line-height:1.05}
 .brand h1{font-family:Fraunces,Georgia,serif;font-weight:500;font-size:26px;letter-spacing:.01em}
 .brand h1 i{font-weight:400;color:var(--accent)}
 .brand p{font-size:11.5px;color:var(--muted);margin-top:4px;letter-spacing:.02em}
-.actions{pointer-events:auto;display:flex;gap:6px;background:var(--chrome);backdrop-filter:blur(14px);
-  -webkit-backdrop-filter:blur(14px);border:1px solid var(--chrome-line);border-radius:var(--radius);padding:6px}
+.actions{pointer-events:auto;display:flex;gap:6px;background:var(--chrome);
+  border:1px solid var(--chrome-line);border-radius:var(--radius);padding:6px}
 .actions button{display:flex;align-items:center;gap:7px;height:40px;padding:0 13px;border-radius:12px;font-size:13.5px;font-weight:500;transition:background .15s}
 .actions button:hover{background:rgba(255,244,224,.09)}
 .actions button.primary{background:var(--accent);color:#1c1406}
@@ -44,7 +44,7 @@ header{position:fixed;top:max(12px,env(safe-area-inset-top));left:16px;right:16p
 .actions svg{width:18px;height:18px;flex:none}
 
 .dock{position:fixed;left:50%;transform:translateX(-50%);bottom:max(14px,env(safe-area-inset-bottom));
-  width:min(760px,calc(100vw - 32px));background:var(--chrome);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  width:min(760px,calc(100vw - 32px));background:var(--chrome);
   border:1px solid var(--chrome-line);border-radius:22px;padding:8px;display:flex;flex-direction:column;gap:8px}
 .tools{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
 .tools button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 2px 7px;border-radius:14px;
@@ -64,7 +64,7 @@ header{position:fixed;top:max(12px,env(safe-area-inset-top));left:16px;right:16p
 .size .dot span{display:block;border-radius:50%;background:var(--ink)}
 
 .hint{position:fixed;left:50%;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 136px);transform:translateX(-50%);padding:12px 18px;border-radius:999px;
-  background:rgba(20,18,24,.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-size:14px;
+  background:rgba(24,21,28,.93);font-size:14px;
   pointer-events:none;transition:opacity .6s;white-space:nowrap;border:1px solid var(--chrome-line)}
 .hint.gone{opacity:0}
 .toast{position:fixed;left:50%;top:84px;transform:translateX(-50%);background:var(--accent);color:#1c1406;font-weight:600;
@@ -137,9 +137,19 @@ header{position:fixed;top:max(12px,env(safe-area-inset-top));left:16px;right:16p
 <script>
 (() => {
 'use strict';
+/* Ebru Studio — WebGL engine.
+   The tray is a colour image (snap) plus a backward map M: what you see at x is snap(M(x)).
+   Every tool is an exactly or iteratively invertible deformation, so a whole frame of tool
+   motion is folded into M in one GPU pass, whatever the complexity of the pattern.
+   The image is only resampled when new paint is dropped, which keeps the edges crisp. */
 const cv = document.getElementById('c');
-const ctx = cv.getContext('2d', { alpha: false });
+const gl = cv.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false });
+if (!gl || !gl.getExtension('EXT_color_buffer_float')) {
+  document.getElementById('hint').textContent = 'This browser has no WebGL2 support, so the tray cannot run here.';
+  return;
+}
 let W = 0, H = 0, DPR = 1;
+const MARGIN = 220;                   // paint kept this far outside the view (combs pull it in)
 
 const PALETTE = [
   ['Lapis', '#1f4597'], ['Indigo', '#1a2350'], ['Carmine', '#b3243b'], ['Rose', '#e3849a'],
@@ -159,193 +169,300 @@ const BASE = '#efe3c8';
 let base = BASE;
 let colorIdx = 0, tool = 'drop', size = 38;
 
-/* ---------- geometry: each paint drop is a closed polygon ---------- */
-let drops = [];            // { p: Float64Array [x,y,...], n, c }
-let geomDirty = true, dirty = true;
-const MARGIN = 280;        // paint kept this far outside the view
-
+function rgb(hex) { const v = parseInt(hex.slice(1), 16); return [(v >> 16) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255]; }
 function shade(hex) {
-  const v = parseInt(hex.slice(1), 16);
   const k = 1 + (Math.random() - 0.5) * 0.14;
-  const f = x => Math.max(0, Math.min(255, Math.round(x * k)));
-  return `rgb(${f(v >> 16)},${f((v >> 8) & 255)},${f(v & 255)})`;
-}
-function circle(cx, cy, r) {
-  const n = Math.max(28, Math.ceil(2 * Math.PI * r / 2.2));
-  const p = new Float64Array(n * 2);
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    p[2 * i] = cx + r * Math.cos(a); p[2 * i + 1] = cy + r * Math.sin(a);
-  }
-  return { p, n };
+  return rgb(hex).map(x => Math.max(0, Math.min(1, x * k)));
 }
 
-/* Drop: every point is pushed out radially so the area of the new drop fits in.
-   P' = C + (P-C) * sqrt(1 + r^2 / |P-C|^2)   (area-preserving, like real paint on size) */
-function opDrop(cx, cy, r2) {
-  for (const d of bodies()) {
-    const p = d.p, m = d.n * 2;
-    for (let i = 0; i < m; i += 2) {
-      const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
-      if (q < 1e-12 || r2 < q * 1e-8) continue;
-      const s = Math.sqrt(1 + r2 / q);
-      p[i] = cx + dx * s; p[i + 1] = cy + dy * s;
+/* ---------- GPU programs ---------- */
+const VS = `#version 300 es
+void main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+const COMMON = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform highp sampler2D uM;   uniform vec2 uMSize; uniform float uMS;
+uniform sampler2D uSnap;       uniform vec2 uSnapSize; uniform float uSS;
+uniform float uMargin;
+uniform float uOS; uniform vec2 uOrigin; uniform float uFlipH;   // output: texels per css px, css origin, flip height (0 = none)
+out vec4 o;
+vec2 cssPos() {
+  vec2 f = gl_FragCoord.xy;
+  if (uFlipH > 0.0) f.y = uFlipH - f.y;
+  return f / uOS + uOrigin;
+}
+vec2 sampleM(vec2 p) {
+  vec2 lo = vec2(-uMargin), hi = (uMSize - 1.0) / uMS - uMargin;
+  vec2 pc = clamp(p, lo, hi);
+  vec2 t = (pc + uMargin) * uMS - 0.5;
+  vec2 f = fract(t); ivec2 i = ivec2(floor(t)); ivec2 mx = ivec2(uMSize) - 1;
+  ivec2 a = clamp(i, ivec2(0), mx), b = clamp(i + 1, ivec2(0), mx);
+  vec2 v00 = texelFetch(uM, a, 0).xy, v10 = texelFetch(uM, ivec2(b.x, a.y), 0).xy;
+  vec2 v01 = texelFetch(uM, ivec2(a.x, b.y), 0).xy, v11 = texelFetch(uM, b, 0).xy;
+  return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) + (p - pc);
+}
+vec3 snapAt(vec2 s) { return texture(uSnap, (s + uMargin) * uSS / uSnapSize).rgb; }
+`;
+
+const SIM_FS = COMMON + `
+uniform sampler2D uOps; uniform int uN; uniform int uMode; uniform float uAA;
+vec4 opA(int k) { return texelFetch(uOps, ivec2(2 * k, 0), 0); }
+vec4 opB(int k) { return texelFetch(uOps, ivec2(2 * k + 1, 0), 0); }
+float gelgit(float y, float s) {
+  float lam = s * 0.2, i = floor(y / s + 0.5), v = 0.0;
+  for (int d = -1; d <= 1; d++) { float k = i + float(d); v += (mod(abs(k), 2.0) > 0.5 ? -1.0 : 1.0) * exp(-abs(y - k * s) / lam); }
+  return v;
+}
+float strokeW(vec2 p, vec2 a, vec2 u, float z, float sp, float lam) {
+  float cut = lam * 9.0; vec2 r = p - a; float al = dot(r, u);
+  float da = al > z ? al - z : (al < 0.0 ? -al : 0.0);
+  if (da > cut) return 0.0;
+  float pe = dot(r, vec2(-u.y, u.x));
+  if (sp > 0.0) pe -= sp * floor(pe / sp + 0.5); else if (abs(pe) > cut) return 0.0;
+  float dd = sqrt(da * da + pe * pe);
+  return dd > cut ? 0.0 : z * exp(-dd / lam);
+}
+vec2 rot(vec2 c, vec2 d, float an) { float co = cos(an), si = sin(an); return c + vec2(d.x * co - d.y * si, d.x * si + d.y * co); }
+void main() {
+  vec2 p = cssPos();
+  if (uMode == 2) { o = vec4(p, 0.0, 1.0); return; }
+  vec2 y = p; bool hit = false; vec3 hc = vec3(0.0); float aw = 0.0; vec3 ac = vec3(0.0);
+  for (int k = uN - 1; k >= 0; k--) {
+    vec4 A = opA(k), B = opB(k); int t = int(A.x + 0.5);
+    if (t == 1 || t == 2) {                       // new paint / a drop spreading
+      vec2 c = A.yz; float r2 = A.w; vec2 d = y - c; float q = dot(d, d);
+      if (q <= r2) { if (t == 1) { hit = true; hc = B.xyz; break; } y = c; continue; }
+      if (t == 1 && aw == 0.0) { float e = sqrt(q) - sqrt(r2); if (e < uAA) { aw = 1.0 - e / uAA; ac = B.xyz; } }
+      y = c + d * sqrt(1.0 - r2 / q);
+    } else if (t == 3) {                          // stylus or comb step
+      vec2 a = A.yz, m = vec2(A.w, B.x) - a; float z = length(m);
+      if (z < 1e-3) continue;
+      vec2 u = m / z;
+      float w = strokeW(y, a, u, z, B.y, B.z);
+      if (w == 0.0) continue;
+      vec2 q = y - u * w;
+      for (int it = 0; it < 3; it++) q = y - u * strokeW(q, a, u, z, B.y, B.z);
+      y = q;
+    } else if (t == 4) {                          // swirl
+      vec2 c = A.yz, d = y - c; float R2 = B.x * B.x, q = dot(d, d);
+      if (q <= 9.0 * R2) y = rot(c, d, -A.w * exp(-q / R2));
+    } else if (t == 5) {                          // shear used by the classic patterns
+      float z = A.y; int kind = int(A.z + 0.5); bool vert = A.w > 0.5; float s = B.x, lam = B.y;
+      float v = vert ? y.x : y.y;
+      float f = kind == 0 ? gelgit(v, s) : (kind == 1 ? exp(-abs(v - s * floor(v / s + 0.5)) / lam) : sin(v * 6.2831853 / s));
+      if (vert) y.y -= z * f; else y.x -= z * f;
+    } else if (t == 6) {                          // bulbul nests: many small swirls on a lattice
+      float sp = A.y, an = A.z, Wl = A.w, Hl = B.x, R2 = sp * sp * 0.1156, cut = 6.0 * R2, e6 = exp(-6.0);
+      float jc = floor((y.y - sp * 0.5) / sp + 0.5);
+      for (int dj = 1; dj >= -1; dj--) {
+        float j = jc + float(dj); float cy = sp * 0.5 + j * sp;
+        if (j < 0.0 || cy >= Hl) continue;
+        float off = sp * 0.5 + mod(j, 2.0) * sp * 0.5, ic = floor((y.x - off) / sp + 0.5);
+        for (int di = 1; di >= -1; di--) {
+          float i = ic + float(di); float cx = off + i * sp;
+          if (i < 0.0 || cx >= Wl) continue;
+          vec2 c = vec2(cx, cy), d = y - c; float q = dot(d, d);
+          if (q > cut) continue;
+          y = rot(c, d, -an * (exp(-q / R2) - e6) / (1.0 - e6));
+        }
+      }
     }
   }
-  geomDirty = true;
+  if (uMode == 0) { o = vec4(sampleM(y), 0.0, 1.0); return; }
+  vec3 col = hit ? hc : snapAt(sampleM(y));
+  if (!hit && aw > 0.0) col = mix(col, ac, aw);
+  o = vec4(col, 1.0);
+}`;
+
+const SHOW_FS = COMMON + `
+uniform float uRim; uniform float uPx;
+vec3 at(vec2 p) { return snapAt(sampleM(p)); }
+void main() {
+  vec2 p = cssPos();
+  vec3 c = at(p);
+  if (uRim > 0.0) {
+    vec3 a = at(p + vec2(uPx, 0.0)), b = at(p - vec2(uPx, 0.0)), d = at(p + vec2(0.0, uPx)), e = at(p - vec2(0.0, uPx));
+    float g = max(max(length(a - c), length(b - c)), max(length(d - c), length(e - c)));
+    c = mix(c, vec3(1.0, 0.973, 0.91), smoothstep(0.06, 0.28, g) * uRim);
+  }
+  o = vec4(c, 1.0);
+}`;
+
+function compile(fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
+  return { p, u };
+}
+const SIM = compile(SIM_FS), SHOW = compile(SHOW_FS);
+gl.bindVertexArray(gl.createVertexArray());
+
+function makeTex(w, h, fmt, filter) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, fmt, w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const f = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  return { t, f, w, h };
+}
+function freeTex(x) { if (x) { gl.deleteTexture(x.t); gl.deleteFramebuffer(x.f); } }
+
+const MAXTEX = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+const OPS_PER_PASS = MAXTEX >> 1;
+const opsTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, opsTex);
+gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, MAXTEX, 1);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+const opsBuf = new Float32Array(MAXTEX * 4);
+
+/* simulation state */
+let SS = 1.5, MS = 0.75;     // texels per css px for the colour image and for the map
+let snap = null, snap2 = null, M = null, M2 = null;
+
+function bindSource(prog, snapT, mT) {
+  const u = prog.u;
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mT.t); gl.uniform1i(u.uM, 0);
+  gl.uniform2f(u.uMSize, mT.w, mT.h); gl.uniform1f(u.uMS, MS);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, snapT.t); gl.uniform1i(u.uSnap, 1);
+  gl.uniform2f(u.uSnapSize, snapT.w, snapT.h); gl.uniform1f(u.uSS, SS);
+  gl.uniform1f(u.uMargin, MARGIN);
+}
+function bindTarget(prog, target, scale) {
+  const u = prog.u;
+  if (target) { gl.bindFramebuffer(gl.FRAMEBUFFER, target.f); gl.viewport(0, 0, target.w, target.h); gl.uniform2f(u.uOrigin, -MARGIN, -MARGIN); gl.uniform1f(u.uFlipH, 0); }
+  else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.uniform2f(u.uOrigin, 0, 0); gl.uniform1f(u.uFlipH, cv.height); }
+  gl.uniform1f(u.uOS, scale);
+}
+/* one simulation pass: mode 0 = fold ops into the map, 1 = bake ops into a new image, 2 = identity map */
+function simPass(mode, n, srcSnap, srcM, target, scale) {
+  gl.useProgram(SIM.p);
+  bindSource(SIM, srcSnap, srcM);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, opsTex); gl.uniform1i(SIM.u.uOps, 2);
+  gl.uniform1i(SIM.u.uN, n); gl.uniform1i(SIM.u.uMode, mode); gl.uniform1f(SIM.u.uAA, 0.9);
+  bindTarget(SIM, target, scale);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+function resetMap() { simPass(2, 0, snap, M2, M, MS); }   // source must differ from the target
+function fillBase(hex) {
+  const [r, g, b] = rgb(hex);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, snap.f); gl.viewport(0, 0, snap.w, snap.h);
+  gl.clearColor(r, g, b, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  resetMap(); dirty = true;
+}
+
+/* ---------- operation queue ---------- */
+const T_NEW = 1, T_GROW = 2, T_STROKE = 3, T_SWIRL = 4, T_SHEAR = 5, T_NESTS = 6;
+let queue = [];
+function enqueue(t, a, b, c, d, e, f, g) { queue.push([t, a, b, c, d || 0, e || 0, f || 0, g || 0]); }
+function flush() {
+  let i = 0;
+  while (i < queue.length) {
+    const chunk = queue.slice(i, i + OPS_PER_PASS); i += chunk.length;
+    let fresh = false;
+    chunk.forEach((op, k) => { opsBuf.set(op, k * 8); if (op[0] === T_NEW) fresh = true; });
+    gl.bindTexture(gl.TEXTURE_2D, opsTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chunk.length * 2, 1, gl.RGBA, gl.FLOAT, opsBuf, 0);
+    if (fresh) { simPass(1, chunk.length, snap, M, snap2, SS); [snap, snap2] = [snap2, snap]; resetMap(); }
+    else { simPass(0, chunk.length, snap, M, M2, MS); [M, M2] = [M2, M]; }
+  }
+  queue = [];
+}
+
+/* ---------- operations (forward on tracked points, inverse on the GPU) ---------- */
+/* Drop: every point is pushed out radially so the area of the new drop fits in.
+   P' = C + (P-C) * sqrt(1 + r^2 / |P-C|^2)   (area-preserving, like real paint on size) */
+function opDrop(cx, cy, r2, col) {
+  const p = trace.p;
+  for (let i = 0; i < p.length; i += 2) {
+    const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
+    if (q < 1e-12 || r2 < q * 1e-8) continue;
+    const s = Math.sqrt(1 + r2 / q);
+    p[i] = cx + dx * s; p[i + 1] = cy + dy * s;
+  }
+  if (col) enqueue(T_NEW, cx, cy, r2, col[0], col[1], col[2]);
+  else enqueue(T_GROW, cx, cy, r2);
 }
 /* Stroke: a stylus (spacing 0) or a comb of parallel tines moving from A to B.
    Paint near the tines is dragged along, with exponential fall-off. */
+function strokeW(px, py, ax, ay, ux, uy, z, spacing, lam) {
+  const cut = lam * 9, rx = px - ax, ry = py - ay, al = rx * ux + ry * uy;
+  const da = al > z ? al - z : (al < 0 ? -al : 0);
+  if (da > cut) return 0;
+  let pe = -rx * uy + ry * ux;
+  if (spacing > 0) pe -= spacing * Math.round(pe / spacing);
+  else if (pe > cut || pe < -cut) return 0;
+  const dd = Math.sqrt(da * da + pe * pe);
+  return dd > cut ? 0 : z * Math.exp(-dd / lam);
+}
 function opStroke(ax, ay, bx, by, spacing, lam) {
   const mx = bx - ax, my = by - ay, z = Math.hypot(mx, my);
   if (z < 1e-3) return;
-  const ux = mx / z, uy = my / z, nx = -uy, ny = ux, cut = lam * 9;
-  for (const d of bodies()) {
-    const p = d.p, m = d.n * 2;
-    for (let i = 0; i < m; i += 2) {
-      const rx = p[i] - ax, ry = p[i + 1] - ay;
-      const al = rx * ux + ry * uy;
-      const da = al > z ? al - z : (al < 0 ? -al : 0);
-      if (da > cut) continue;
-      let pe = rx * nx + ry * ny;
-      if (spacing > 0) pe -= spacing * Math.round(pe / spacing);
-      else if (pe > cut || pe < -cut) continue;
-      const dd = Math.sqrt(da * da + pe * pe);
-      if (dd > cut) continue;
-      const w = z * Math.exp(-dd / lam);
-      p[i] += ux * w; p[i + 1] += uy * w;
-    }
+  const ux = mx / z, uy = my / z, p = trace.p;
+  for (let i = 0; i < p.length; i += 2) {
+    const w = strokeW(p[i], p[i + 1], ax, ay, ux, uy, z, spacing, lam);
+    p[i] += ux * w; p[i + 1] += uy * w;
   }
-  geomDirty = true;
+  enqueue(T_STROKE, ax, ay, bx, by, spacing, lam);
 }
 /* Swirl: each ring around the centre turns rigidly, inner rings faster. */
 function opSwirl(cx, cy, ang, R) {
-  const R2 = R * R, cut = 9 * R2;
-  for (const d of bodies()) {
-    const p = d.p, m = d.n * 2;
-    for (let i = 0; i < m; i += 2) {
-      const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
-      if (q > cut) continue;
-      const a = ang * Math.exp(-q / R2), c = Math.cos(a), s = Math.sin(a);
-      p[i] = cx + dx * c - dy * s; p[i + 1] = cy + dx * s + dy * c;
-    }
+  const R2 = R * R, cut = 9 * R2, p = trace.p;
+  for (let i = 0; i < p.length; i += 2) {
+    const dx = p[i] - cx, dy = p[i + 1] - cy, q = dx * dx + dy * dy;
+    if (q > cut) continue;
+    const a = ang * Math.exp(-q / R2), c = Math.cos(a), s = Math.sin(a);
+    p[i] = cx + dx * c - dy * s; p[i + 1] = cy + dx * s + dy * c;
   }
-  geomDirty = true;
+  enqueue(T_SWIRL, cx, cy, ang, R);
 }
 /* Shears used by the classic patterns: x += z*f(y)  or  y += z*f(x) */
-function opShear(z, f, vertical) {
-  const a = vertical ? 0 : 1, b = vertical ? 1 : 0;
-  for (const d of bodies()) {
-    const p = d.p, m = d.n * 2;
-    for (let i = 0; i < m; i += 2) p[i + b] += z * f(p[i + a]);
-  }
-  geomDirty = true;
+function gelgitF(s) {
+  const lam = s * 0.2;
+  return y => {
+    const i = Math.round(y / s); let v = 0;
+    for (let k = i - 1; k <= i + 1; k++) v += ((k & 1) ? -1 : 1) * Math.exp(-Math.abs(y - k * s) / lam);
+    return v;
+  };
 }
-
-/* Keep curves smooth: split long edges, merge tiny ones, thin out paint far off-screen. */
-let buf = new Float64Array(1 << 16);
-function ensure(k) {
-  if (buf.length >= k) return;
-  let L = buf.length; while (L < k) L *= 2;
-  const nb = new Float64Array(L); nb.set(buf); buf = nb;
+function shearFn(kind, s, lam) {
+  if (kind === 0) return gelgitF(s);
+  if (kind === 1) return x => Math.exp(-Math.abs(x - s * Math.round(x / s)) / lam);
+  return v => Math.sin(v * Math.PI * 2 / s);
 }
-function oc(x, y) {
-  return (x < -MARGIN ? 1 : 0) | (x > W + MARGIN ? 2 : 0) | (y < -MARGIN ? 4 : 0) | (y > H + MARGIN ? 8 : 0);
+function opShear(z, kind, s, lam, vertical) {
+  const f = shearFn(kind, s, lam), a = vertical ? 0 : 1, b = vertical ? 1 : 0, p = trace.p;
+  for (let i = 0; i < p.length; i += 2) p[i + b] += z * f(p[i + a]);
+  enqueue(T_SHEAR, z, kind, vertical ? 1 : 0, s, lam);
 }
-function refine(d, maxL) {
-  const p = d.p, n = d.n, maxL2 = maxL * maxL, minL = Math.max(0.65, maxL * 0.36), minL2 = minL * minL, canDrop = n > 14;
-  let m = 0; ensure(n * 2 + 64);
-  let lx = p[0], ly = p[1], lo = oc(lx, ly);
-  buf[m++] = lx; buf[m++] = ly;
-  let x0 = lx, x1 = lx, y0 = ly, y1 = ly;
-  for (let i = 1; i <= n; i++) {
-    const j = i === n ? 0 : i, x = p[2 * j], y = p[2 * j + 1], o = oc(x, y);
-    const dx = x - lx, dy = y - ly, L2 = dx * dx + dy * dy;
-    if (i < n && canDrop) {
-      if (L2 < minL2) continue;
-      if (lo & o) {
-        const k = (i + 1) % n;
-        if (lo & o & oc(p[2 * k], p[2 * k + 1])) continue;
-      }
-    }
-    if (L2 > maxL2 && !(lo & o)) {
-      const k = Math.ceil(Math.sqrt(L2) / maxL);
-      ensure(m + 2 * k + 4);
-      for (let t = 1; t < k; t++) { buf[m++] = lx + dx * t / k; buf[m++] = ly + dy * t / k; }
-    }
-    if (i < n) {
-      ensure(m + 4);
-      buf[m++] = x; buf[m++] = y; lx = x; ly = y; lo = o;
-      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-    }
-  }
-  d.p = buf.slice(0, m); d.n = m >> 1;
-  d.out = x1 < -MARGIN || x0 > W + MARGIN || y1 < -MARGIN || y0 > H + MARGIN;
-}
-/* Vertex budget: when the curves get very long, sample them a little coarser so it stays smooth to use. */
-let totalVerts = 0, maxL = 2.2;
-function budget() { return 90000 + 70000 * Math.min(1.4, (W * H) / 1296000); }
-function refineAll() {
-  const B = budget();
-  if (totalVerts > B) maxL = Math.min(8, maxL * Math.min(1.25, Math.sqrt(totalVerts / B)));
-  else if (totalVerts < B * 0.7) maxL = Math.max(2.2, maxL * 0.97);
-  let t = 0;
-  for (const d of drops) { refine(d, maxL); t += d.n; }
-  if (drops.some(d => d.out)) drops = drops.filter(d => !d.out);
-  totalVerts = t;
-}
-
-/* ---------- rendering ---------- */
-function render(fine) {
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = base; ctx.fillRect(0, 0, W, H);
-  ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(255,248,232,.28)'; ctx.lineWidth = 0.9;
-  for (const d of drops) {
-    const p = d.p, m = d.n * 2;
-    ctx.beginPath(); ctx.moveTo(p[0], p[1]);
-    for (let i = 2; i < m; i += 2) ctx.lineTo(p[i], p[i + 1]);
-    ctx.closePath();
-    ctx.fillStyle = d.c; ctx.fill();
-    if (fine) ctx.stroke();
-  }
-}
-
-/* paper grain overlay (also baked into the PNG) */
-const grain = document.createElement('canvas');
-(function makeGrain() {
-  const S = 220; grain.width = grain.height = S;
-  const g = grain.getContext('2d'), img = g.createImageData(S, S);
-  for (let i = 0; i < S * S; i++) {
-    const v = 236 + Math.random() * 19;
-    img.data[4 * i] = v; img.data[4 * i + 1] = v - 2; img.data[4 * i + 2] = v - 6; img.data[4 * i + 3] = 255;
-  }
-  g.putImageData(img, 0, 0);
-  g.strokeStyle = 'rgba(150,120,80,.10)'; g.lineWidth = 0.6;
-  for (let i = 0; i < 70; i++) {
-    const x = Math.random() * S, y = Math.random() * S, a = Math.random() * 6.28, l = 4 + Math.random() * 12;
-    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + l * .5 * Math.cos(a + .5), y + l * .5 * Math.sin(a + .5), x + l * Math.cos(a), y + l * Math.sin(a)); g.stroke();
-  }
-  document.getElementById('grain').style.background = `url(${grain.toDataURL()})`;
-})();
 
 /* ---------- live drops that bloom open ---------- */
 /* A growing drop's centre is itself carried by the flow, so it is tracked as a point (trace). */
 let grows = [];
-let trace = { p: new Float64Array(0), n: 0 };
-function bodies() { return trace.n ? drops.concat(trace) : drops; }
+let trace = { p: new Float64Array(0) };
 function readBack() { for (let i = 0; i < grows.length; i++) { grows[i].x = trace.p[2 * i]; grows[i].y = trace.p[2 * i + 1]; } }
 function rebuild() {
   const p = new Float64Array(grows.length * 2);
   grows.forEach((g, i) => { p[2 * i] = g.x; p[2 * i + 1] = g.y; });
-  trace = { p, n: grows.length };
+  trace = { p };
 }
 function spawnDrop(x, y, r, hex, hold) {
-  const r0 = 0.9;
-  opDrop(x, y, r0 * r0);
+  const r0 = 2.2;
+  opDrop(x, y, r0 * r0, shade(hex));
   readBack();
-  const d = Object.assign(circle(x, y, r0), { c: shade(hex) });
-  drops.push(d);
-  const g = { d, x, y, r2: r0 * r0, t2: r * r, hold: !!hold };
+  const g = { x, y, r2: r0 * r0, t2: r * r, hold: !!hold };
   grows.push(g);
   rebuild();
   return g;
@@ -373,8 +490,8 @@ let tasks = [];
 function* wait(n) { for (let i = 0; i < n; i++) yield; }
 function* settle() { while (grows.length) yield; }
 const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-function* shearAnim(total, steps, f, vertical) {
-  for (let t = 0; t < steps; t++) { opShear(total * (ease((t + 1) / steps) - ease(t / steps)), f, vertical); yield; }
+function* shearAnim(total, steps, kind, s, lam, vertical) {
+  for (let t = 0; t < steps; t++) { opShear(total * (ease((t + 1) / steps) - ease(t / steps)), kind, s, lam, vertical); yield; }
 }
 /* battal: scatter drops until the tray (plus a margin) is covered about `cover` times */
 function* battal(cols, cover, rmin, rmax, perFrame) {
@@ -389,51 +506,26 @@ function* battal(cols, cover, rmin, rmax, perFrame) {
   }
   yield* settle();
 }
-function gelgitF(s) {
-  const lam = s * 0.2;
-  return y => {
-    const i = Math.round(y / s); let v = 0;
-    for (let k = i - 1; k <= i + 1; k++) v += ((k & 1) ? -1 : 1) * Math.exp(-Math.abs(y - k * s) / lam);
-    return v;
-  };
-}
-function combF(s, lam) { return x => Math.exp(-Math.abs(x - s * Math.round(x / s)) / lam); }
-function* gelgit(s, amp, vertical) { yield* shearAnim(amp, 70, gelgitF(s), vertical); }
-function* comb(s, amp, vertical) { yield* shearAnim(amp, 64, combF(s, s * 0.17), vertical); }
-function* wave(len, amp, vertical) { yield* shearAnim(amp, 50, v => Math.sin(v * Math.PI * 2 / len), vertical); }
+function* gelgit(s, amp, vertical) { yield* shearAnim(amp, 70, 0, s, 0, vertical); }
+function* comb(s, amp, vertical) { yield* shearAnim(amp, 64, 1, s, s * 0.17, vertical); }
+function* wave(len, amp, vertical) { yield* shearAnim(amp, 50, 2, len, 0, vertical); }
 function* nests(spacing, turns) {
   const pts = [];
   for (let y = spacing * .5; y < H + spacing; y += spacing)
     for (let x = spacing * .5 + ((y / spacing | 0) % 2) * spacing * .5; x < W + spacing; x += spacing) pts.push([x, y]);
-  const steps = 64, R = spacing * 0.34, R2 = R * R, cut = 6 * R2, e6 = Math.exp(-6), cell = spacing;
-  // centres bucketed in a dense grid so each point only checks its neighbours
-  const gx0 = -cell, gy0 = -cell, GC = Math.ceil((W + 3 * cell) / cell), GR = Math.ceil((H + 3 * cell) / cell);
-  const grid = Array.from({ length: GC * GR }, () => []);
-  for (const c of pts) {
-    const i = Math.floor((c[0] - gx0) / cell), j = Math.floor((c[1] - gy0) / cell);
-    if (i >= 0 && i < GC && j >= 0 && j < GR) grid[i * GR + j].push(c);
-  }
+  const steps = 64, R = spacing * 0.34, R2 = R * R, cut = 6 * R2, e6 = Math.exp(-6);
+  const Wl = W + spacing, Hl = H + spacing;
   for (let t = 0; t < steps; t++) {
     const a = turns * Math.PI * 2 * (ease((t + 1) / steps) - ease(t / steps));
-    for (const d of bodies()) {
-      const p = d.p, m = d.n * 2;
-      for (let i = 0; i < m; i += 2) {
-        const ci = Math.floor((p[i] - gx0) / cell), cj = Math.floor((p[i + 1] - gy0) / cell);
-        if (ci < 0 || cj < 0 || ci >= GC || cj >= GR) continue;
-        for (let u = Math.max(0, ci - 1); u <= Math.min(GC - 1, ci + 1); u++)
-          for (let v = Math.max(0, cj - 1); v <= Math.min(GR - 1, cj + 1); v++) {
-            const list = grid[u * GR + v];
-            for (let k = 0; k < list.length; k++) {
-              const c = list[k], dx = p[i] - c[0], dy = p[i + 1] - c[1], q = dx * dx + dy * dy;
-              if (q > cut) continue;
-              // tapered to exactly zero at the cut-off so neighbouring nests never tear
-              const an = a * (Math.exp(-q / R2) - e6) / (1 - e6), co = Math.cos(an), si = Math.sin(an);
-              p[i] = c[0] + dx * co - dy * si; p[i + 1] = c[1] + dx * si + dy * co;
-            }
-          }
+    const p = trace.p;
+    for (let i = 0; i < p.length; i += 2)
+      for (const c of pts) {
+        const dx = p[i] - c[0], dy = p[i + 1] - c[1], q = dx * dx + dy * dy;
+        if (q > cut) continue;
+        const an = a * (Math.exp(-q / R2) - e6) / (1 - e6), co = Math.cos(an), si = Math.sin(an);
+        p[i] = c[0] + dx * co - dy * si; p[i + 1] = c[1] + dx * si + dy * co;
       }
-    }
-    geomDirty = true;
+    enqueue(T_NESTS, spacing, a, Wl, Hl);
     yield;
   }
 }
@@ -485,7 +577,7 @@ let lastRecipe = '';
 function playRecipe(name, th) {
   snapshot();
   cancelAll();
-  drops = []; base = th.base; totalVerts = 0; maxL = 2.2; geomDirty = dirty = true;
+  base = th.base; fillBase(base);
   tasks = RECIPES[name](th);
   lastRecipe = name;
   toast({ tarakli: 'Taraklı ebru — combed', sal: 'Şal ebru — shawl', bulbul: 'Bülbül yuvası — nightingale’s nest', hatip: 'Hatip ebru', gelgit: 'Gel-git ebru — back and forth' }[name]);
@@ -496,15 +588,21 @@ function randomPattern() {
 }
 function cancelAll() { tasks = []; grows = []; later.length = 0; rebuild(); if (ptr) ptr.g = null; }
 
-/* ---------- undo ---------- */
+/* ---------- undo: each step is a baked copy of the tray on the GPU ---------- */
 const history = [];
+let histMax = 8;
 function snapshot() {
-  history.push({ base, drops: drops.map(d => ({ p: d.p.slice(0, d.n * 2), n: d.n, c: d.c })) });
-  if (history.length > 14) history.shift();
+  flush();
+  const h = makeTex(snap.w, snap.h, gl.RGBA8, gl.LINEAR);
+  simPass(1, 0, snap, M, h, SS);
+  history.push({ base, tex: h });
+  while (history.length > histMax) freeTex(history.shift().tex);
 }
 function undo() {
   const s = history.pop(); if (!s) return;
-  cancelAll(); base = s.base; drops = s.drops; geomDirty = dirty = true;
+  cancelAll(); queue = [];
+  freeTex(snap); snap = s.tex; base = s.base;
+  resetMap(); dirty = true;
 }
 
 /* ---------- pointer ---------- */
@@ -559,7 +657,7 @@ function stepPointer() {
   for (let i = 0; i < P.length; i += 2) {
     const tx = P[i], ty = P[i + 1], dx = tx - ptr.lx, dy = ty - ptr.ly, L = Math.hypot(dx, dy);
     if (L < 0.5) continue;
-    const k = Math.min(40, Math.ceil(L / maxStep));
+    const k = Math.min(60, Math.ceil(L / maxStep));
     for (let s = 0; s < k; s++)
       opStroke(ptr.lx + dx * s / k, ptr.ly + dy * s / k, ptr.lx + dx * (s + 1) / k, ptr.ly + dy * (s + 1) / k, spacing, lam);
     ptr.lx = tx; ptr.ly = ty;
@@ -568,26 +666,53 @@ function stepPointer() {
 }
 
 /* ---------- main loop ---------- */
-let frameNo = 0;
-const perf = []; let still = false;
+let dirty = true;
+function show() {
+  gl.useProgram(SHOW.p);
+  bindSource(SHOW, snap, M);
+  bindTarget(SHOW, null, DPR);
+  gl.uniform1f(SHOW.u.uRim, 0.28); gl.uniform1f(SHOW.u.uPx, 0.75);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+const perf = [];
 function frame() {
   requestAnimationFrame(frame);
   const t0 = performance.now();
-  frameNo++;
   for (let i = later.length - 1; i >= 0; i--) if (--later[i].t <= 0) { later[i].fn(); later.splice(i, 1); }
   if (tasks.length) { const r = tasks[0].next(); if (r.done) tasks.shift(); }
   stepPointer();
   stepGrows();
-  // moving frames draw fills only; the first still frame adds the thin light rims between colours
-  if (geomDirty) { refineAll(); geomDirty = false; render(false); still = false; }
-  else if (!still || dirty) { render(true); still = true; dirty = false; }
+  if (queue.length) { flush(); dirty = true; }
+  if (dirty) { show(); dirty = false; }
   perf.push(performance.now() - t0); if (perf.length > 120) perf.shift();
 }
 
 function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
-  W = window.innerWidth; H = window.innerHeight;
-  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  const nW = window.innerWidth, nH = window.innerHeight;
+  cv.width = Math.round(nW * DPR); cv.height = Math.round(nH * DPR);
+  if (nW === W && nH === H && snap) { dirty = true; return; }
+  flush();
+  // colour image a little sharper than the screen, so resampling on new paint stays invisible
+  const area = (nW + 2 * MARGIN) * (nH + 2 * MARGIN);
+  SS = Math.min(Math.max(1.25, DPR), Math.sqrt(14e6 / area));
+  MS = SS * 0.5;
+  const sw = Math.min(MAXTEX, Math.ceil((nW + 2 * MARGIN) * SS)), sh = Math.min(MAXTEX, Math.ceil((nH + 2 * MARGIN) * SS));
+  const mw = Math.min(MAXTEX, Math.ceil((nW + 2 * MARGIN) * MS)), mh = Math.min(MAXTEX, Math.ceil((nH + 2 * MARGIN) * MS));
+  const nSnap = makeTex(sw, sh, gl.RGBA8, gl.LINEAR), nSnap2 = makeTex(sw, sh, gl.RGBA8, gl.LINEAR);
+  const nM = makeTex(mw, mh, gl.RG32F, gl.NEAREST), nM2 = makeTex(mw, mh, gl.RG32F, gl.NEAREST);
+  if (snap) {
+    // carry the current picture over at the same screen position
+    simPass(1, 0, snap, M, nSnap, SS);
+    [snap, snap2, M, M2].forEach(freeTex);
+    history.splice(0).forEach(h => freeTex(h.tex));
+    snap = nSnap; snap2 = nSnap2; M = nM; M2 = nM2; W = nW; H = nH;
+    resetMap();
+  } else {
+    snap = nSnap; snap2 = nSnap2; M = nM; M2 = nM2; W = nW; H = nH;
+    fillBase(base);
+  }
+  histMax = Math.max(3, Math.min(12, Math.floor(180e6 / (sw * sh * 4))));
   dirty = true;
 }
 window.addEventListener('resize', resize);
@@ -614,13 +739,34 @@ sizeEl.addEventListener('input', () => setSize(sizeEl.value)); setSize(sizeEl.va
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('on'), 2200); }
 
+/* paper grain overlay (also baked into the PNG) */
+const grain = document.createElement('canvas');
+(function makeGrain() {
+  const S = 220; grain.width = grain.height = S;
+  const g = grain.getContext('2d'), img = g.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = 236 + Math.random() * 19;
+    img.data[4 * i] = v; img.data[4 * i + 1] = v - 2; img.data[4 * i + 2] = v - 6; img.data[4 * i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  g.strokeStyle = 'rgba(150,120,80,.10)'; g.lineWidth = 0.6;
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * S, y = Math.random() * S, a = Math.random() * 6.28, l = 4 + Math.random() * 12;
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + l * .5 * Math.cos(a + .5), y + l * .5 * Math.sin(a + .5), x + l * Math.cos(a), y + l * Math.sin(a)); g.stroke();
+  }
+  document.getElementById('grain').style.background = `url(${grain.toDataURL()})`;
+})();
+
 function save() {
-  render(true);
-  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
-  const o = out.getContext('2d');
-  o.drawImage(cv, 0, 0);
+  flush(); show();
+  const w = cv.width, h = cv.height, px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const out = document.createElement('canvas'); out.width = w; out.height = h;
+  const o = out.getContext('2d'), img = o.createImageData(w, h), row = w * 4;
+  for (let y = 0; y < h; y++) img.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  o.putImageData(img, 0, 0);
   o.globalCompositeOperation = 'multiply'; o.globalAlpha = 0.55;
-  o.fillStyle = o.createPattern(grain, 'repeat'); o.fillRect(0, 0, out.width, out.height);
+  o.fillStyle = o.createPattern(grain, 'repeat'); o.fillRect(0, 0, w, h);
   out.toBlob(b => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(b); a.download = 'ebru-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.png';
@@ -630,7 +776,7 @@ function save() {
   }, 'image/png');
 }
 document.getElementById('bUndo').onclick = undo;
-document.getElementById('bClear').onclick = () => { snapshot(); cancelAll(); drops = []; base = BASE; totalVerts = 0; maxL = 2.2; dirty = true; };
+document.getElementById('bClear').onclick = () => { snapshot(); cancelAll(); queue = []; base = BASE; fillBase(base); };
 document.getElementById('bAuto').onclick = () => { hideHint(); randomPattern(); };
 document.getElementById('bSave').onclick = save;
 window.addEventListener('keydown', e => {
@@ -647,7 +793,7 @@ window.addEventListener('keydown', e => {
 window.__ebru = {
   play: name => playRecipe(name, THEMES[0]),
   work: () => { const a = perf.slice().sort((x, y) => x - y); return { avg: +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(2), p95: +a[Math.floor(a.length * .95)].toFixed(2) }; },
-  stats: () => ({ drops: drops.length, verts: totalVerts, busy: tasks.length + grows.length + later.length }),
+  stats: () => ({ busy: tasks.length + grows.length + later.length, history: history.length, tex: [snap.w, snap.h, M.w, M.h] }),
 };
 
 resize();
